@@ -12,5 +12,7 @@ func init() {
 	pkl.RegisterStrictMapping("tempo.pipeline.domain.WorkDomain#Project", Project{})
 	pkl.RegisterStrictMapping("tempo.pipeline.domain.WorkDomain#Scope", Scope{})
 	pkl.RegisterStrictMapping("tempo.pipeline.domain.WorkDomain#Task", Task{})
+	pkl.RegisterStrictMapping("tempo.pipeline.domain.WorkDomain#TaskBindingRule", TaskBindingRule{})
+	pkl.RegisterStrictMapping("tempo.pipeline.domain.WorkDomain#TaskMatch", TaskMatch{})
 	pkl.RegisterStrictMapping("tempo.pipeline.domain.WorkDomain#WorkPlan", WorkPlan{})
 }

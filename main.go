@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	"dagger/tempo-pipeline/domain"
+	"dagger/tempo-pipeline/internal/compiler"
 	"dagger/tempo-pipeline/internal/dagger"
 	"dagger/tempo-pipeline/internal/evidence"
 	"dagger/tempo-pipeline/internal/otel"
 	"dagger/tempo-pipeline/internal/planner"
+	"dagger/tempo-pipeline/internal/taskwarrior"
 	"dagger/tempo-pipeline/projections"
 )
 
@@ -57,10 +60,51 @@ func (m *TempoPipeline) ValidatePlan(
 	// +defaultPath="task-dag.jsonl"
 	taskExport *dagger.File,
 ) (string, error) {
-	if err := validateTaskExport(ctx, taskExport); err != nil {
+	result, err := validateTaskExport(ctx, taskExport)
+	if err != nil {
 		return "", err
 	}
-	return planner.Summary(domain.TempoPipelinePlan), nil
+	return planner.Summary(result), nil
+}
+
+// GenerateDag compiles Taskwarrior JSONL into a generated DAG directory.
+//
+// It is a pure compiler: it does not execute Dagger tasks, start Tempo, emit OTEL, or verify evidence.
+func (m *TempoPipeline) GenerateDag(
+	ctx context.Context,
+	// Taskwarrior JSONL from `task export` with json.array=off.
+	//
+	// +defaultPath="task-dag.jsonl"
+	taskExport *dagger.File,
+	// Domain Pkl config. Defaults to the bundled pkl/plans/tempo-pipeline.pkl model.
+	//
+	// +optional
+	domainConfig *dagger.File,
+) (*dagger.Directory, error) {
+	contents, err := defaultTaskExport(taskExport).Contents(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read task export: %w", err)
+	}
+	tasks, err := taskwarrior.ParseExport(contents)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := loadDomainConfig(ctx, domainConfig)
+	if err != nil {
+		return nil, err
+	}
+	result := compiler.Generate(tasks, cfg)
+	artifacts, err := compiler.RenderArtifacts(result)
+	if err != nil {
+		return nil, err
+	}
+	return dag.Directory().
+		WithNewFile("dag.json", artifacts.DAGJSON).
+		WithNewFile("diagnostics.json", artifacts.DiagnosticsJSON).
+		WithNewFile("normalized-taskwarrior.jsonl", artifacts.NormalizedTaskwarriorJSONL).
+		WithNewFile("evidence-contract.json", artifacts.EvidenceContractJSON).
+		WithNewFile("otel-projection.json", artifacts.OtelProjectionJSON).
+		WithNewFile("runbook.md", artifacts.RunbookMarkdown), nil
 }
 
 // Check validates the plan, runs the Dagger functions, and verifies required evidence.
@@ -74,7 +118,7 @@ func (m *TempoPipeline) Check(
 	taskExport *dagger.File,
 ) (string, error) {
 	evidence.Reset()
-	if err := validateTaskExport(ctx, taskExport); err != nil {
+	if _, err := validateTaskExport(ctx, taskExport); err != nil {
 		return "", err
 	}
 
@@ -133,12 +177,16 @@ echo "ok: validated %s and confirmed required OTEL spans in Tempo"`, projections
 		Stdout(ctx)
 }
 
-func validateTaskExport(ctx context.Context, taskExport *dagger.File) error {
+func validateTaskExport(ctx context.Context, taskExport *dagger.File) (compiler.Result, error) {
 	contents, err := defaultTaskExport(taskExport).Contents(ctx)
 	if err != nil {
-		return fmt.Errorf("read task export: %w", err)
+		return compiler.Result{}, fmt.Errorf("read task export: %w", err)
 	}
-	return planner.ValidateCurrentPlanExport(contents)
+	result, err := planner.ValidateCurrentPlanExport(contents)
+	if err != nil && compiler.HasErrors(result) {
+		return result, fmt.Errorf("%w: see generate-dag diagnostics for details", err)
+	}
+	return result, err
 }
 
 func defaultTaskExport(taskExport *dagger.File) *dagger.File {
@@ -154,6 +202,34 @@ func expectedSpanNames() []string {
 		names = append(names, span.Name)
 	}
 	return names
+}
+
+func loadDomainConfig(ctx context.Context, domainConfig *dagger.File) (domain.WorkDomain, error) {
+	if domainConfig == nil {
+		return domain.Current, nil
+	}
+	out, err := dag.Container().
+		From("buildpack-deps:bookworm-curl").
+		WithDirectory("/work/pkl", dag.CurrentModule().Source().Directory("pkl")).
+		WithFile("/work/pkl/plans/domain-config.pkl", domainConfig).
+		WithExec([]string{"sh", "-c", `
+set -eu
+curl --fail-with-body --show-error --silent --location \
+  https://github.com/apple/pkl/releases/download/0.31.1/pkl-linux-amd64 \
+  --output /tmp/pkl
+chmod +x /tmp/pkl
+/tmp/pkl eval /work/pkl/plans/domain-config.pkl --format json > /tmp/domain.json
+`}).
+		File("/tmp/domain.json").
+		Contents(ctx)
+	if err != nil {
+		return domain.WorkDomain{}, fmt.Errorf("evaluate domain config: %w", err)
+	}
+	var cfg domain.WorkDomain
+	if err := json.Unmarshal([]byte(out), &cfg); err != nil {
+		return domain.WorkDomain{}, fmt.Errorf("decode domain config: %w", err)
+	}
+	return cfg, nil
 }
 
 // EmitEvidence records JSONL evidence and emits the OTEL projection for one work-plan task.

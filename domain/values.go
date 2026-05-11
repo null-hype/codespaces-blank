@@ -35,6 +35,35 @@ var Current = WorkDomain{
 			AllowedTargets: []string{"dagger-module", "tempo-service"},
 		},
 	},
+	BindingRules: []TaskBindingRule{
+		{
+			Id:         "bind.run-tempo",
+			TaskID:     stringPtr("task.run-tempo"),
+			Match:      TaskMatch{Description: stringPtr("run-tempo"), Project: stringPtr("tempo-pipeline"), Tags: []string{"dag", "dagger"}},
+			Actor:      "actor.dagger",
+			Capability: "cap.dagger-service",
+			Command:    &Command{Kind: "dagger-function", Name: "RunTempo"},
+			Evidence:   []EvidenceRequirement{{Id: "ev.run-tempo.jsonl", Kind: "jsonl-event", Required: true}, {Id: "ev.run-tempo.otel", Kind: "otel-span", Required: true}},
+		},
+		{
+			Id:         "bind.tempo",
+			TaskID:     stringPtr("task.tempo"),
+			Match:      TaskMatch{Description: stringPtr("tempo"), Project: stringPtr("tempo-pipeline"), Tags: []string{"dag", "dagger"}},
+			Actor:      "actor.dagger",
+			Capability: "cap.dagger-service",
+			Command:    &Command{Kind: "dagger-function", Name: "Tempo"},
+			Evidence:   []EvidenceRequirement{{Id: "ev.tempo.jsonl", Kind: "jsonl-event", Required: true}, {Id: "ev.tempo.otel", Kind: "otel-span", Required: true}},
+		},
+		{
+			Id:         "bind.check",
+			TaskID:     stringPtr("task.check"),
+			Match:      TaskMatch{Description: stringPtr("check"), Project: stringPtr("tempo-pipeline"), Tags: []string{"dag", "dagger"}},
+			Actor:      "actor.dagger",
+			Capability: "cap.evidence-check",
+			Command:    &Command{Kind: "dagger-function", Name: "Check"},
+			Evidence:   []EvidenceRequirement{{Id: "ev.check.diagnostic", Kind: "diagnostic", Required: true}},
+		},
+	},
 	Plans: []WorkPlan{TempoPipelinePlan},
 }
 
@@ -88,4 +117,8 @@ var CheckTask = Task{
 	Capability:      "cap.evidence-check",
 	Command:         &Command{Kind: "dagger-function", Name: "Check"},
 	Evidence:        []EvidenceRequirement{{Id: "ev.check.diagnostic", Kind: "diagnostic", Required: true}},
+}
+
+func stringPtr(value string) *string {
+	return &value
 }

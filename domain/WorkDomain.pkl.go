@@ -16,6 +16,8 @@ type WorkDomain struct {
 
 	Scopes []Scope `pkl:"scopes" json:"scopes,omitempty"`
 
+	BindingRules []TaskBindingRule `pkl:"bindingRules" json:"bindingRules,omitempty"`
+
 	Plans []WorkPlan `pkl:"plans" json:"plans,omitempty"`
 
 	ProjectRefsKnown bool `pkl:"projectRefsKnown" json:"projectRefsKnown,omitempty"`
@@ -23,6 +25,8 @@ type WorkDomain struct {
 	TaskRefsKnown bool `pkl:"taskRefsKnown" json:"taskRefsKnown,omitempty"`
 
 	ActorCapabilitiesAllowed bool `pkl:"actorCapabilitiesAllowed" json:"actorCapabilitiesAllowed,omitempty"`
+
+	BindingRuleRefsKnown bool `pkl:"bindingRuleRefsKnown" json:"bindingRuleRefsKnown,omitempty"`
 }
 
 // LoadFromPath loads the pkl module at the given path and evaluates it into a WorkDomain

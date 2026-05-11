@@ -44,6 +44,22 @@ class EvidenceRequirement {
   required: Boolean = true
 }
 
+class TaskMatch {
+  description: String? = null
+  project: String? = null
+  tags: Listing<String> = new {}
+}
+
+class TaskBindingRule {
+  id: ID
+  taskID: ID? = null
+  match: TaskMatch
+  actor: ID
+  capability: ID
+  command: Command?
+  evidence: Listing<EvidenceRequirement> = new {}
+}
+
 class Task {
   id: ID
   taskwarriorUuid: String(!isEmpty)
@@ -73,6 +89,7 @@ projects: Listing<Project>(!isEmpty, isDistinctBy((project) -> project.id))
 actors: Listing<Actor>(!isEmpty, isDistinctBy((actor) -> actor.id))
 capabilities: Listing<Capability>(!isEmpty, isDistinctBy((capability) -> capability.id))
 scopes: Listing<Scope>(!isEmpty, isDistinctBy((scope) -> scope.id))
+bindingRules: Listing<TaskBindingRule>(isDistinctBy((rule) -> rule.id)) = new {}
 plans: Listing<WorkPlan>(!isEmpty, isDistinctBy((plan) -> plan.id))
 
 projectRefsKnown: Boolean(this == true) = plans.every((plan) ->
@@ -92,4 +109,8 @@ actorCapabilitiesAllowed: Boolean(this == true) = plans.every((plan) ->
   plan.tasks.every((task) ->
     actors.any((actor) -> actor.id == task.actor && actor.allowedCapabilities.contains(task.capability))
   )
+)
+bindingRuleRefsKnown: Boolean(this == true) = bindingRules.every((rule) ->
+  actors.any((actor) -> actor.id == rule.actor && actor.allowedCapabilities.contains(rule.capability)) &&
+  capabilities.any((capability) -> capability.id == rule.capability)
 )

@@ -57,6 +57,89 @@ scopes {
   }
 }
 
+bindingRules {
+  new TaskBindingRule {
+    id = "bind.run-tempo"
+    taskID = "task.run-tempo"
+    match {
+      description = "run-tempo"
+      project = "tempo-pipeline"
+      tags {
+        "dag"
+        "dagger"
+      }
+    }
+    actor = "actor.dagger"
+    capability = "cap.dagger-service"
+    command {
+      kind = "dagger-function"
+      name = "RunTempo"
+    }
+    evidence {
+      new EvidenceRequirement {
+        id = "ev.run-tempo.jsonl"
+        kind = "jsonl-event"
+      }
+      new EvidenceRequirement {
+        id = "ev.run-tempo.otel"
+        kind = "otel-span"
+      }
+    }
+  }
+  new TaskBindingRule {
+    id = "bind.tempo"
+    taskID = "task.tempo"
+    match {
+      description = "tempo"
+      project = "tempo-pipeline"
+      tags {
+        "dag"
+        "dagger"
+      }
+    }
+    actor = "actor.dagger"
+    capability = "cap.dagger-service"
+    command {
+      kind = "dagger-function"
+      name = "Tempo"
+    }
+    evidence {
+      new EvidenceRequirement {
+        id = "ev.tempo.jsonl"
+        kind = "jsonl-event"
+      }
+      new EvidenceRequirement {
+        id = "ev.tempo.otel"
+        kind = "otel-span"
+      }
+    }
+  }
+  new TaskBindingRule {
+    id = "bind.check"
+    taskID = "task.check"
+    match {
+      description = "check"
+      project = "tempo-pipeline"
+      tags {
+        "dag"
+        "dagger"
+      }
+    }
+    actor = "actor.dagger"
+    capability = "cap.evidence-check"
+    command {
+      kind = "dagger-function"
+      name = "Check"
+    }
+    evidence {
+      new EvidenceRequirement {
+        id = "ev.check.diagnostic"
+        kind = "diagnostic"
+      }
+    }
+  }
+}
+
 plans {
   new WorkPlan {
     id = "plan.tempo-pipeline"
