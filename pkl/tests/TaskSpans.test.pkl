@@ -1,0 +1,15 @@
+amends "pkl:test"
+
+import "../taskSpans.pkl"
+
+facts {
+  ["trace id is stable"] {
+    taskSpans.traceID == "8ecc483576007b7d4f49decdd2ffb495"
+  }
+
+  ["check is metadata, not required emission"] {
+    taskSpans.expected.length == 2
+    taskSpans.expected[0].goName == "RunTempo"
+    taskSpans.expected[1].goName == "Tempo"
+  }
+}

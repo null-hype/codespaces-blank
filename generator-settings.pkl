@@ -1,0 +1,7 @@
+amends "package://pkg.pkl-lang.org/pkl-go/pkl.golang@0.13.2#/GeneratorSettings.pkl"
+
+basePath = "dagger/tempo-pipeline"
+
+structTags {
+  ["json"] = "%{name},omitempty"
+}

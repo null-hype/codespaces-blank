@@ -1,0 +1,44 @@
+@go.Package { name = "dagger/tempo-pipeline/spans" }
+module tempo.pipeline.TaskSpans
+
+import "package://pkg.pkl-lang.org/pkl-go/pkl.golang@0.13.2#/go.pkl"
+
+typealias HexTraceID = String(length == 32)
+typealias HexSpanID = String(length == 16)
+typealias GoIdentifier = String(matches(Regex(#"[A-Z][A-Za-z0-9]*"#)))
+
+class SpanRef {
+  name: String(!isEmpty)
+  uuid: String(!isEmpty)
+  spanID: HexSpanID
+}
+
+class TaskSpan {
+  goName: GoIdentifier
+  name: String(!isEmpty)
+  uuid: String(!isEmpty)
+  traceID: HexTraceID
+  spanID: HexSpanID
+  required: Boolean = true
+  status: String? = null
+  project: String? = null
+  tags: Listing<String> = new {}
+  depends: Listing<SpanRef> = new {}
+}
+
+traceID: HexTraceID
+spans: Listing<TaskSpan>(
+  !isEmpty,
+  isDistinctBy((span) -> span.uuid),
+  isDistinctBy((span) -> span.goName),
+  every((span) -> span.traceID == traceID),
+  every((span) -> !span.depends.any((dep) -> dep.uuid == span.uuid))
+)
+dependenciesKnown: Boolean(this == true) = spans.every((span) -> span.depends.every((dep) -> spans.any((candidate) -> candidate.uuid == dep.uuid)))
+expected: Listing<TaskSpan> = new {
+  for (span in spans) {
+    when (span.required) {
+      span
+    }
+  }
+}
