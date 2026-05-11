@@ -1,0 +1,60 @@
+@go.Package { name = "dagger/tempo-pipeline/projections" }
+module tempo.pipeline.projections.Projections
+
+import "package://pkg.pkl-lang.org/pkl-go/pkl.golang@0.13.2#/go.pkl"
+
+typealias HexTraceID = String(length == 32)
+typealias HexSpanID = String(length == 16)
+typealias GoIdentifier = String(matches(Regex(#"[A-Z][A-Za-z0-9]*"#)))
+
+class SpanRef {
+  taskID: String(!isEmpty)
+  name: String(!isEmpty)
+  spanID: HexSpanID
+}
+
+class OtelSpan {
+  taskID: String(!isEmpty)
+  goName: GoIdentifier
+  name: String(!isEmpty)
+  taskwarriorUuid: String(!isEmpty)
+  traceID: HexTraceID
+  spanID: HexSpanID
+  required: Boolean = true
+  project: String(!isEmpty)
+  status: String(!isEmpty)
+  tags: Listing<String> = new {}
+  depends: Listing<SpanRef> = new {}
+}
+
+class EvidenceExpectation {
+  taskID: String(!isEmpty)
+  kind: "jsonl-event"|"otel-span"|"diagnostic"|"markdown-report"
+  required: Boolean = true
+}
+
+planID: String(!isEmpty)
+traceID: HexTraceID
+otelSpans: Listing<OtelSpan>(
+  isDistinctBy((span) -> span.taskID),
+  isDistinctBy((span) -> span.goName),
+  isDistinctBy((span) -> span.taskwarriorUuid),
+  every((span) -> span.traceID == traceID)
+)
+expectedOtel: Listing<OtelSpan> = new {
+  for (span in otelSpans) {
+    when (span.required) {
+      span
+    }
+  }
+}
+evidence: Listing<EvidenceExpectation>(
+  isDistinctBy((expectation) -> "\(expectation.taskID):\(expectation.kind)")
+)
+expectedEvidence: Listing<EvidenceExpectation> = new {
+  for (expectation in evidence) {
+    when (expectation.required) {
+      expectation
+    }
+  }
+}

@@ -1,0 +1,95 @@
+@go.Package { name = "dagger/tempo-pipeline/domain" }
+module tempo.pipeline.domain.WorkDomain
+
+import "package://pkg.pkl-lang.org/pkl-go/pkl.golang@0.13.2#/go.pkl"
+
+typealias ID = String(!isEmpty)
+typealias GoIdentifier = String(matches(Regex(#"[A-Z][A-Za-z0-9]*"#)))
+
+class Project {
+  id: ID
+  name: String(!isEmpty)
+  kind: "security-research"|"software"|"ops"|"toolchain"
+}
+
+class Actor {
+  id: ID
+  kind: "human"|"llm-agent"|"dagger-function"|"external-tool"
+  description: String(!isEmpty)
+  allowedCapabilities: Listing<ID> = new {}
+}
+
+class Capability {
+  id: ID
+  kind: "plan"|"dagger-service"|"evidence-check"|"report"|"passive-recon"|"browser-test"
+  tool: String(!isEmpty)
+  maxRisk: "low"|"medium"|"high" = "low"
+}
+
+class Scope {
+  id: ID
+  description: String(!isEmpty)
+  allowedTargets: Listing<String> = new {}
+  forbiddenActions: Listing<String> = new {}
+}
+
+class Command {
+  kind: "dagger-function"|"shell"|"manual"
+  name: GoIdentifier
+}
+
+class EvidenceRequirement {
+  id: ID
+  kind: "jsonl-event"|"otel-span"|"diagnostic"|"markdown-report"
+  required: Boolean = true
+}
+
+class Task {
+  id: ID
+  taskwarriorUuid: String(!isEmpty)
+  description: String(!isEmpty)
+  project: ID
+  status: "pending"|"active"|"blocked"|"done"|"failed" = "pending"
+  tags: Listing<String> = new {}
+  dependsOn: Listing<ID> = new {}
+  actor: ID
+  capability: ID
+  command: Command?
+  evidence: Listing<EvidenceRequirement> = new {}
+}
+
+class WorkPlan {
+  id: ID
+  project: ID
+  scope: ID
+  tasks: Listing<Task>(
+    !isEmpty,
+    isDistinctBy((task) -> task.id),
+    isDistinctBy((task) -> task.taskwarriorUuid)
+  )
+}
+
+projects: Listing<Project>(!isEmpty, isDistinctBy((project) -> project.id))
+actors: Listing<Actor>(!isEmpty, isDistinctBy((actor) -> actor.id))
+capabilities: Listing<Capability>(!isEmpty, isDistinctBy((capability) -> capability.id))
+scopes: Listing<Scope>(!isEmpty, isDistinctBy((scope) -> scope.id))
+plans: Listing<WorkPlan>(!isEmpty, isDistinctBy((plan) -> plan.id))
+
+projectRefsKnown: Boolean(this == true) = plans.every((plan) ->
+  projects.any((project) -> project.id == plan.project) &&
+  scopes.any((scope) -> scope.id == plan.scope) &&
+  plan.tasks.every((task) -> projects.any((project) -> project.id == task.project))
+)
+taskRefsKnown: Boolean(this == true) = plans.every((plan) ->
+  plan.tasks.every((task) ->
+    actors.any((actor) -> actor.id == task.actor) &&
+    capabilities.any((capability) -> capability.id == task.capability) &&
+    task.dependsOn.every((dep) -> plan.tasks.any((candidate) -> candidate.id == dep)) &&
+    !task.dependsOn.any((dep) -> dep == task.id)
+  )
+)
+actorCapabilitiesAllowed: Boolean(this == true) = plans.every((plan) ->
+  plan.tasks.every((task) ->
+    actors.any((actor) -> actor.id == task.actor && actor.allowedCapabilities.contains(task.capability))
+  )
+)

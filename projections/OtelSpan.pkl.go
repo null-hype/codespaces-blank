@@ -1,12 +1,14 @@
-// Code generated from Pkl module `tempo.pipeline.TaskSpans`. DO NOT EDIT.
-package spans
+// Code generated from Pkl module `tempo.pipeline.projections.Projections`. DO NOT EDIT.
+package projections
 
-type TaskSpan struct {
+type OtelSpan struct {
+	TaskID string `pkl:"taskID" json:"taskID,omitempty"`
+
 	GoName string `pkl:"goName" json:"goName,omitempty"`
 
 	Name string `pkl:"name" json:"name,omitempty"`
 
-	Uuid string `pkl:"uuid" json:"uuid,omitempty"`
+	TaskwarriorUuid string `pkl:"taskwarriorUuid" json:"taskwarriorUuid,omitempty"`
 
 	TraceID string `pkl:"traceID" json:"traceID,omitempty"`
 
@@ -14,9 +16,9 @@ type TaskSpan struct {
 
 	Required bool `pkl:"required" json:"required,omitempty"`
 
-	Status *string `pkl:"status" json:"status,omitempty"`
+	Project string `pkl:"project" json:"project,omitempty"`
 
-	Project *string `pkl:"project" json:"project,omitempty"`
+	Status string `pkl:"status" json:"status,omitempty"`
 
 	Tags []string `pkl:"tags" json:"tags,omitempty"`
 

@@ -2,32 +2,26 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/hex"
 	"fmt"
 	"strings"
-	"time"
 
-	"dagger/tempo-pipeline/spans"
-
+	"dagger/tempo-pipeline/domain"
 	"dagger/tempo-pipeline/internal/dagger"
-	commonv1 "go.opentelemetry.io/proto/otlp/common/v1"
-	resourcev1 "go.opentelemetry.io/proto/otlp/resource/v1"
-	tracev1 "go.opentelemetry.io/proto/otlp/trace/v1"
-	"google.golang.org/protobuf/proto"
+	"dagger/tempo-pipeline/internal/evidence"
+	"dagger/tempo-pipeline/internal/otel"
+	"dagger/tempo-pipeline/internal/planner"
+	"dagger/tempo-pipeline/projections"
 )
 
 type TempoPipeline struct{}
 
-const taskTraceNamespace = "tempo-pipeline/task-dag"
-
-// RunTempo returns a service that runs Grafana Tempo and emits its typed task span.
+// RunTempo returns a service that runs Grafana Tempo and emits evidence for the run-tempo task.
 func (m *TempoPipeline) RunTempo(
 	ctx context.Context,
 	config *dagger.File,
 ) (*dagger.Service, error) {
 	svc := m.runTempoService(config)
-	if err := EmitOtel(ctx, svc, spans.RunTempo); err != nil {
+	if err := EmitEvidence(ctx, svc, domain.RunTempoTask, projections.RunTempo); err != nil {
 		return nil, err
 	}
 	return svc, nil
@@ -43,24 +37,52 @@ func (m *TempoPipeline) runTempoService(config *dagger.File) *dagger.Service {
 		AsService(dagger.ContainerAsServiceOpts{Args: []string{"/tempo", "-config.file=/etc/tempo.yaml"}})
 }
 
-// Tempo returns a service that runs Grafana Tempo with this module's default config and emits its typed task span.
+// Tempo returns a service that runs Grafana Tempo with this module's default config and emits evidence for the tempo task.
 func (m *TempoPipeline) Tempo(ctx context.Context) (*dagger.Service, error) {
 	svc, err := m.RunTempo(ctx, dag.CurrentModule().Source().File("tempo-config.yaml"))
 	if err != nil {
 		return nil, err
 	}
-	if err := EmitOtel(ctx, svc, spans.Tempo); err != nil {
+	if err := EmitEvidence(ctx, svc, domain.TempoTask, projections.Tempo); err != nil {
 		return nil, err
 	}
 	return svc, nil
 }
 
-// Check asserts that required typed task spans emitted by Dagger functions are present in Tempo.
+// ValidatePlan validates a Taskwarrior JSONL export against the Pkl-modeled work plan.
+func (m *TempoPipeline) ValidatePlan(
+	ctx context.Context,
+	// Taskwarrior JSONL from `task export` with json.array=off.
+	//
+	// +defaultPath="task-dag.jsonl"
+	taskExport *dagger.File,
+) (string, error) {
+	if err := validateTaskExport(ctx, taskExport); err != nil {
+		return "", err
+	}
+	return planner.Summary(domain.TempoPipelinePlan), nil
+}
+
+// Check validates the plan, runs the Dagger functions, and verifies required evidence.
 //
 // +check
-func (m *TempoPipeline) Check(ctx context.Context) (string, error) {
+func (m *TempoPipeline) Check(
+	ctx context.Context,
+	// Taskwarrior JSONL from `task export` with json.array=off.
+	//
+	// +defaultPath="task-dag.jsonl"
+	taskExport *dagger.File,
+) (string, error) {
+	evidence.Reset()
+	if err := validateTaskExport(ctx, taskExport); err != nil {
+		return "", err
+	}
+
 	svc, err := m.Tempo(ctx)
 	if err != nil {
+		return "", err
+	}
+	if err := evidence.Verify(projections.ExpectedEvidence); err != nil {
 		return "", err
 	}
 
@@ -107,21 +129,38 @@ until result=$(curl_tempo "http://tempo:3200/api/traces/%s") && all_spans_presen
   sleep 1
 done
 
-echo "ok: task DAG trace %s confirmed in Tempo"`, spans.TraceID, spans.TraceID, spans.TraceID, spans.TraceID)}).
+echo "ok: validated %s and confirmed required OTEL spans in Tempo"`, projections.TraceID, projections.TraceID, projections.TraceID, domain.TempoPipelinePlan.Id)}).
 		Stdout(ctx)
 }
 
+func validateTaskExport(ctx context.Context, taskExport *dagger.File) error {
+	contents, err := defaultTaskExport(taskExport).Contents(ctx)
+	if err != nil {
+		return fmt.Errorf("read task export: %w", err)
+	}
+	return planner.ValidateCurrentPlanExport(contents)
+}
+
+func defaultTaskExport(taskExport *dagger.File) *dagger.File {
+	if taskExport != nil {
+		return taskExport
+	}
+	return dag.CurrentModule().Source().File("task-dag.jsonl")
+}
+
 func expectedSpanNames() []string {
-	names := make([]string, 0, len(spans.Expected))
-	for _, span := range spans.Expected {
+	names := make([]string, 0, len(projections.ExpectedOtel))
+	for _, span := range projections.ExpectedOtel {
 		names = append(names, span.Name)
 	}
 	return names
 }
 
-// EmitOtel emits one typed task span contract to the bound Tempo service.
-func EmitOtel(ctx context.Context, svc *dagger.Service, span spans.TaskSpan) error {
-	tracePayload, err := taskSpanPayloadBase64(span)
+// EmitEvidence records JSONL evidence and emits the OTEL projection for one work-plan task.
+func EmitEvidence(ctx context.Context, svc *dagger.Service, task domain.Task, span projections.OtelSpan) error {
+	evidence.RecordTask(domain.TempoPipelinePlan.Id, task, "jsonl-event")
+
+	tracePayload, err := otel.PayloadBase64(span)
 	if err != nil {
 		return err
 	}
@@ -137,7 +176,7 @@ curl_tempo() {
   curl --fail-with-body --show-error --silent --connect-timeout 2 --max-time 5 "$@"
 }
 
-echo "waiting for Tempo readiness before emitting task span %s"
+echo "waiting for Tempo readiness before emitting evidence for %s"
 i=0
 until curl_tempo http://tempo:3200/ready >/dev/null; do
   i=$((i + 1))
@@ -148,140 +187,12 @@ until curl_tempo http://tempo:3200/ready >/dev/null; do
   sleep 1
 done
 
-echo "emitting task span %s"
+echo "emitting OTEL evidence for %s"
 base64 -d /tmp/task-trace.pb.b64 > /tmp/task-trace.pb
 curl_tempo -X POST http://tempo:4318/v1/traces \
   -H 'Content-Type: application/x-protobuf' \
   --data-binary @/tmp/task-trace.pb >/dev/null
-`, span.Name, span.Name)}).
+`, task.Id, task.Id)}).
 		Sync(ctx)
 	return err
-}
-
-func taskSpanPayloadBase64(span spans.TaskSpan) (string, error) {
-	traceID, err := hex.DecodeString(span.TraceID)
-	if err != nil {
-		return "", fmt.Errorf("decode trace id for %s: %w", span.GoName, err)
-	}
-	spanID, err := hex.DecodeString(span.SpanID)
-	if err != nil {
-		return "", fmt.Errorf("decode span id for %s: %w", span.GoName, err)
-	}
-	now := time.Now().UnixNano()
-
-	payload := &tracev1.TracesData{
-		ResourceSpans: []*tracev1.ResourceSpans{
-			{
-				Resource: &resourcev1.Resource{
-					Attributes: []*commonv1.KeyValue{
-						kvString("service.name", "taskwarrior-dag"),
-						kvString("dagger.module", "tempo-pipeline"),
-					},
-				},
-				ScopeSpans: []*tracev1.ScopeSpans{
-					{
-						Scope: &commonv1.InstrumentationScope{
-							Name:    "dagger/tempo-pipeline/" + span.GoName,
-							Version: "pkl-task-span-contract",
-						},
-						Spans: []*tracev1.Span{
-							{
-								TraceId:           traceID,
-								SpanId:            spanID,
-								Name:              span.Name,
-								Kind:              tracev1.Span_SPAN_KIND_INTERNAL,
-								StartTimeUnixNano: uint64(now),
-								EndTimeUnixNano:   uint64(now + 500_000),
-								Attributes:        spanAttributes(span),
-								Links:             spanLinks(span.TraceID, span.Depends),
-								Status:            &tracev1.Status{},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	payloadBytes, err := proto.Marshal(payload)
-	if err != nil {
-		return "", fmt.Errorf("marshal OTLP payload for %s: %w", span.GoName, err)
-	}
-	return base64.StdEncoding.EncodeToString(payloadBytes), nil
-}
-
-func spanAttributes(span spans.TaskSpan) []*commonv1.KeyValue {
-	attrs := []*commonv1.KeyValue{
-		kvString("task.uuid", span.Uuid),
-		kvString("task.description", span.Name),
-		kvString("task.go_name", span.GoName),
-		kvString("task.emitter", "dagger-function"),
-		kvString("task.trace.namespace", taskTraceNamespace),
-	}
-	if span.Status != nil {
-		attrs = append(attrs, kvString("task.status", *span.Status))
-	}
-	if span.Project != nil {
-		attrs = append(attrs, kvString("task.project", *span.Project))
-	}
-	if len(span.Tags) > 0 {
-		attrs = append(attrs, kvStrings("task.tags", span.Tags))
-	}
-	if len(span.Depends) > 0 {
-		depUUIDs := make([]string, 0, len(span.Depends))
-		for _, dep := range span.Depends {
-			depUUIDs = append(depUUIDs, dep.Uuid)
-		}
-		attrs = append(attrs, kvStrings("task.depends", depUUIDs))
-	}
-	return attrs
-}
-
-func spanLinks(traceID string, refs []spans.SpanRef) []*tracev1.Span_Link {
-	links := make([]*tracev1.Span_Link, 0, len(refs))
-	traceBytes, err := hex.DecodeString(traceID)
-	if err != nil {
-		return links
-	}
-	for _, ref := range refs {
-		spanBytes, err := hex.DecodeString(ref.SpanID)
-		if err != nil {
-			continue
-		}
-		links = append(links, &tracev1.Span_Link{
-			TraceId: traceBytes,
-			SpanId:  spanBytes,
-			Attributes: []*commonv1.KeyValue{
-				kvString("task.dependency.name", ref.Name),
-				kvString("task.dependency.uuid", ref.Uuid),
-			},
-		})
-	}
-	return links
-}
-
-func kvString(key string, value string) *commonv1.KeyValue {
-	return &commonv1.KeyValue{
-		Key: key,
-		Value: &commonv1.AnyValue{
-			Value: &commonv1.AnyValue_StringValue{StringValue: value},
-		},
-	}
-}
-
-func kvStrings(key string, values []string) *commonv1.KeyValue {
-	attrValues := make([]*commonv1.AnyValue, 0, len(values))
-	for _, value := range values {
-		attrValues = append(attrValues, &commonv1.AnyValue{
-			Value: &commonv1.AnyValue_StringValue{StringValue: value},
-		})
-	}
-	return &commonv1.KeyValue{
-		Key: key,
-		Value: &commonv1.AnyValue{
-			Value: &commonv1.AnyValue_ArrayValue{
-				ArrayValue: &commonv1.ArrayValue{Values: attrValues},
-			},
-		},
-	}
 }

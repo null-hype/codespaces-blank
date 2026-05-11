@@ -1,0 +1,151 @@
+amends "../domain/WorkDomain.pkl"
+
+projects {
+  new Project {
+    id = "project.tempo-pipeline"
+    name = "Tempo Pipeline"
+    kind = "toolchain"
+  }
+}
+
+actors {
+  new Actor {
+    id = "actor.agent"
+    kind = "llm-agent"
+    description = "Plans work as Taskwarrior tasks and updates the Dagger module."
+    allowedCapabilities {
+      "cap.plan"
+    }
+  }
+  new Actor {
+    id = "actor.dagger"
+    kind = "dagger-function"
+    description = "Runs the Dagger functions and emits execution evidence."
+    allowedCapabilities {
+      "cap.dagger-service"
+      "cap.evidence-check"
+    }
+  }
+}
+
+capabilities {
+  new Capability {
+    id = "cap.plan"
+    kind = "plan"
+    tool = "taskwarrior"
+  }
+  new Capability {
+    id = "cap.dagger-service"
+    kind = "dagger-service"
+    tool = "dagger"
+  }
+  new Capability {
+    id = "cap.evidence-check"
+    kind = "evidence-check"
+    tool = "dagger-check"
+  }
+}
+
+scopes {
+  new Scope {
+    id = "scope.local"
+    description = "Local Dagger module and Tempo smoke-test environment."
+    allowedTargets {
+      "dagger-module"
+      "tempo-service"
+    }
+  }
+}
+
+plans {
+  new WorkPlan {
+    id = "plan.tempo-pipeline"
+    project = "project.tempo-pipeline"
+    scope = "scope.local"
+    tasks {
+      new Task {
+        id = "task.run-tempo"
+        taskwarriorUuid = "11111111-1111-4111-8111-111111111111"
+        description = "run-tempo"
+        project = "project.tempo-pipeline"
+        status = "pending"
+        tags {
+          "dag"
+          "dagger"
+        }
+        actor = "actor.dagger"
+        capability = "cap.dagger-service"
+        command {
+          kind = "dagger-function"
+          name = "RunTempo"
+        }
+        evidence {
+          new EvidenceRequirement {
+            id = "ev.run-tempo.jsonl"
+            kind = "jsonl-event"
+          }
+          new EvidenceRequirement {
+            id = "ev.run-tempo.otel"
+            kind = "otel-span"
+          }
+        }
+      }
+      new Task {
+        id = "task.tempo"
+        taskwarriorUuid = "22222222-2222-4222-8222-222222222222"
+        description = "tempo"
+        project = "project.tempo-pipeline"
+        status = "pending"
+        tags {
+          "dag"
+          "dagger"
+        }
+        dependsOn {
+          "task.run-tempo"
+        }
+        actor = "actor.dagger"
+        capability = "cap.dagger-service"
+        command {
+          kind = "dagger-function"
+          name = "Tempo"
+        }
+        evidence {
+          new EvidenceRequirement {
+            id = "ev.tempo.jsonl"
+            kind = "jsonl-event"
+          }
+          new EvidenceRequirement {
+            id = "ev.tempo.otel"
+            kind = "otel-span"
+          }
+        }
+      }
+      new Task {
+        id = "task.check"
+        taskwarriorUuid = "33333333-3333-4333-8333-333333333333"
+        description = "check"
+        project = "project.tempo-pipeline"
+        status = "pending"
+        tags {
+          "dag"
+          "dagger"
+        }
+        dependsOn {
+          "task.tempo"
+        }
+        actor = "actor.dagger"
+        capability = "cap.evidence-check"
+        command {
+          kind = "dagger-function"
+          name = "Check"
+        }
+        evidence {
+          new EvidenceRequirement {
+            id = "ev.check.diagnostic"
+            kind = "diagnostic"
+          }
+        }
+      }
+    }
+  }
+}

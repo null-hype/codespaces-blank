@@ -1,0 +1,23 @@
+amends "pkl:test"
+
+import "../plans/tempo-pipeline.pkl" as plan
+import "../plans/tempo-pipeline-projections.pkl" as projections
+
+facts {
+  ["domain plan is the authored model"] {
+    plan.plans.length == 1
+    plan.plans[0].tasks.length == 3
+    plan.plans[0].tasks[0].description == "run-tempo"
+  }
+
+  ["otel is a projection"] {
+    projections.otelSpans.length == 2
+    projections.expectedOtel.length == 2
+    projections.expectedOtel[0].taskID == "task.run-tempo"
+    projections.expectedOtel[1].taskID == "task.tempo"
+  }
+
+  ["evidence expectations include non-otel diagnostics"] {
+    projections.expectedEvidence.any((expectation) -> expectation.taskID == "task.check" && expectation.kind == "diagnostic")
+  }
+}

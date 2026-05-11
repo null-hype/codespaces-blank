@@ -1,0 +1,20 @@
+@go.Package { name = "dagger/tempo-pipeline/domain" }
+module tempo.pipeline.domain.Taskwarrior
+
+import "package://pkg.pkl-lang.org/pkl-go/pkl.golang@0.13.2#/go.pkl"
+
+class TaskwarriorTask {
+  uuid: String(!isEmpty)
+  description: String(!isEmpty)
+  project: String? = null
+  status: String? = null
+  tags: Listing<String> = new {}
+  depends: Listing<String> = new {}
+}
+
+tasks: Listing<TaskwarriorTask>(
+  !isEmpty,
+  isDistinctBy((task) -> task.uuid),
+  every((task) -> !task.depends.any((dep) -> dep == task.uuid)),
+  every((task) -> task.depends.every((dep) -> tasks.any((candidate) -> candidate.uuid == dep)))
+)
