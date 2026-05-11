@@ -34,11 +34,13 @@ func TestGenerateValidDefaultPlan(t *testing.T) {
 	}
 }
 
-func TestGenerateReportsMissingBinding(t *testing.T) {
+func TestGenerateReportsUnboundConvention(t *testing.T) {
 	tasks := append(defaultTasks(), taskwarrior.Task{UUID: "44444444-4444-4444-8444-444444444444", Description: "unbound", Project: "tempo-pipeline"})
 	result := Generate(tasks, domain.Current)
 
-	assertDiagnostic(t, result, "MISSING_BINDING")
+	assertDiagnostic(t, result, "UNBOUND_COMMAND")
+	assertDiagnostic(t, result, "UNBOUND_CAPABILITY")
+	assertDiagnostic(t, result, "MISSING_EVIDENCE_REQUIREMENT")
 }
 
 func TestGenerateReportsUnknownDependency(t *testing.T) {
@@ -65,13 +67,33 @@ func TestGenerateReportsDuplicateUUID(t *testing.T) {
 	assertDiagnostic(t, result, "DUPLICATE_UUID")
 }
 
+func TestGenerateReportsMissingUUID(t *testing.T) {
+	tasks := defaultTasks()
+	tasks[0].UUID = ""
+	result := Generate(tasks, domain.Current)
+
+	assertDiagnostic(t, result, "MISSING_UUID")
+}
+
+func TestGenerateReportsSelfDependency(t *testing.T) {
+	tasks := defaultTasks()
+	tasks[0].Depends = []string{tasks[0].UUID}
+	result := Generate(tasks, domain.Current)
+
+	assertDiagnostic(t, result, "SELF_DEPENDENCY")
+}
+
 func TestGenerateReportsDisallowedCapability(t *testing.T) {
 	cfg := domain.Current
-	cfg.BindingRules = append([]domain.TaskBindingRule(nil), cfg.BindingRules...)
-	cfg.BindingRules[0].Actor = "actor.agent"
+	cfg.Actors = append([]domain.Actor(nil), cfg.Actors...)
+	for i := range cfg.Actors {
+		if cfg.Actors[i].Id == "actor.dagger" {
+			cfg.Actors[i].AllowedCapabilities = []string{"cap.evidence-check"}
+		}
+	}
 	result := Generate(defaultTasks(), cfg)
 
-	assertDiagnostic(t, result, "DISALLOWED_CAPABILITY")
+	assertDiagnostic(t, result, "ACTOR_NOT_ALLOWED_CAPABILITY")
 }
 
 func defaultTasks() []taskwarrior.Task {

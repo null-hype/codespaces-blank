@@ -166,37 +166,9 @@ func Generate(tasks []taskwarrior.Task, cfg domain.WorkDomain) Result {
 			})
 		}
 
-		matches := matchingRules(task, cfg.BindingRules)
-		switch len(matches) {
-		case 0:
-			node.ID = uniqueTaskID(slugTaskID(task.Description, task.UUID), idCounts)
-			result.Diagnostics = append(result.Diagnostics, Diagnostic{
-				Severity: "error",
-				Code:     "MISSING_BINDING",
-				Message:  fmt.Sprintf("no binding rule matched task %q", task.Description),
-				TaskID:   node.ID,
-				UUID:     task.UUID,
-			})
-		case 1:
-			rule := matches[0]
-			node.Bound = true
-			node.ID = uniqueTaskID(ruleTaskID(rule, task), idCounts)
-			node.BindingRule = rule.Id
-			node.Actor = rule.Actor
-			node.Capability = rule.Capability
-			node.Command = cloneCommand(rule.Command)
-			node.Evidence = append([]domain.EvidenceRequirement(nil), rule.Evidence...)
-			validateBinding(&result, node, actorCaps, capabilities)
-		default:
-			node.ID = uniqueTaskID(ruleTaskID(matches[0], task), idCounts)
-			result.Diagnostics = append(result.Diagnostics, Diagnostic{
-				Severity: "error",
-				Code:     "AMBIGUOUS_BINDING",
-				Message:  fmt.Sprintf("task %q matched multiple binding rules: %s", task.Description, ruleIDs(matches)),
-				TaskID:   node.ID,
-				UUID:     task.UUID,
-			})
-		}
+		node.ID = uniqueTaskID(slugTaskID(task.Description, task.UUID), idCounts)
+		bindByConvention(&node, task)
+		validateBinding(&result, node, actorCaps, capabilities)
 
 		uuidToNode[task.UUID] = &node
 		result.Nodes = append(result.Nodes, node)
@@ -314,38 +286,6 @@ func normalizeTasks(tasks []taskwarrior.Task) []NormalizedTask {
 	return normalized
 }
 
-func matchingRules(task taskwarrior.Task, rules []domain.TaskBindingRule) []domain.TaskBindingRule {
-	var matches []domain.TaskBindingRule
-	for _, rule := range rules {
-		if matchesRule(task, rule) {
-			matches = append(matches, rule)
-		}
-	}
-	return matches
-}
-
-func matchesRule(task taskwarrior.Task, rule domain.TaskBindingRule) bool {
-	if rule.Match.Description != nil && task.Description != *rule.Match.Description {
-		return false
-	}
-	if rule.Match.Project != nil && task.Project != *rule.Match.Project {
-		return false
-	}
-	for _, tag := range rule.Match.Tags {
-		if !contains(task.Tags, tag) {
-			return false
-		}
-	}
-	return true
-}
-
-func ruleTaskID(rule domain.TaskBindingRule, task taskwarrior.Task) string {
-	if rule.TaskID != nil && *rule.TaskID != "" {
-		return *rule.TaskID
-	}
-	return slugTaskID(task.Description, task.UUID)
-}
-
 func slugTaskID(description, uuid string) string {
 	slug := strings.Trim(strings.Map(func(r rune) rune {
 		switch {
@@ -367,6 +307,35 @@ func slugTaskID(description, uuid string) string {
 		slug += "-" + shortUUID(uuid)
 	}
 	return "task." + slug
+}
+
+func bindByConvention(node *Node, task taskwarrior.Task) {
+	if contains(task.Tags, "dagger") {
+		node.Actor = "actor.dagger"
+	}
+	switch task.Description {
+	case "run-tempo":
+		node.Command = &domain.Command{Kind: "dagger-function", Name: "RunTempo"}
+		node.Capability = "cap.dagger-service"
+		node.Evidence = []domain.EvidenceRequirement{
+			{Id: "ev.run-tempo.jsonl", Kind: "jsonl-event", Required: true},
+			{Id: "ev.run-tempo.otel", Kind: "otel-span", Required: true},
+		}
+	case "tempo":
+		node.Command = &domain.Command{Kind: "dagger-function", Name: "Tempo"}
+		node.Capability = "cap.dagger-service"
+		node.Evidence = []domain.EvidenceRequirement{
+			{Id: "ev.tempo.jsonl", Kind: "jsonl-event", Required: true},
+			{Id: "ev.tempo.otel", Kind: "otel-span", Required: true},
+		}
+	case "check":
+		node.Command = &domain.Command{Kind: "dagger-function", Name: "Check"}
+		node.Capability = "cap.evidence-check"
+		node.Evidence = []domain.EvidenceRequirement{
+			{Id: "ev.check.diagnostic", Kind: "diagnostic", Required: true},
+		}
+	}
+	node.Bound = node.Actor != "" && node.Command != nil && node.Capability != "" && len(node.Evidence) > 0
 }
 
 func uniqueTaskID(id string, counts map[string]int) string {
@@ -474,47 +443,41 @@ func topologicalOrder(result *Result) []string {
 }
 
 func validateBinding(result *Result, node Node, actorCaps map[string]map[string]bool, capabilities map[string]bool) {
-	if _, ok := actorCaps[node.Actor]; !ok {
-		result.Diagnostics = append(result.Diagnostics, Diagnostic{
-			Severity: "error",
-			Code:     "UNKNOWN_ACTOR",
-			Message:  fmt.Sprintf("task %s references unknown actor %s", node.ID, node.Actor),
-			TaskID:   node.ID,
-			UUID:     node.UUID,
-		})
-	}
-	if !capabilities[node.Capability] {
-		result.Diagnostics = append(result.Diagnostics, Diagnostic{
-			Severity: "error",
-			Code:     "UNKNOWN_CAPABILITY",
-			Message:  fmt.Sprintf("task %s references unknown capability %s", node.ID, node.Capability),
-			TaskID:   node.ID,
-			UUID:     node.UUID,
-		})
-	}
-	if caps, ok := actorCaps[node.Actor]; ok && !caps[node.Capability] {
-		result.Diagnostics = append(result.Diagnostics, Diagnostic{
-			Severity: "error",
-			Code:     "DISALLOWED_CAPABILITY",
-			Message:  fmt.Sprintf("actor %s is not allowed to use capability %s for task %s", node.Actor, node.Capability, node.ID),
-			TaskID:   node.ID,
-			UUID:     node.UUID,
-		})
-	}
 	if node.Command == nil {
 		result.Diagnostics = append(result.Diagnostics, Diagnostic{
 			Severity: "error",
-			Code:     "MISSING_COMMAND",
-			Message:  fmt.Sprintf("task %s has no bound command", node.ID),
+			Code:     "UNBOUND_COMMAND",
+			Message:  fmt.Sprintf("task %s has no command bound by convention", node.ID),
 			TaskID:   node.ID,
 			UUID:     node.UUID,
 		})
+	}
+	if node.Capability == "" || !capabilities[node.Capability] {
+		result.Diagnostics = append(result.Diagnostics, Diagnostic{
+			Severity: "error",
+			Code:     "UNBOUND_CAPABILITY",
+			Message:  fmt.Sprintf("task %s has no valid capability bound by convention", node.ID),
+			TaskID:   node.ID,
+			UUID:     node.UUID,
+		})
+	}
+	if node.Actor != "" && node.Capability != "" {
+		caps, ok := actorCaps[node.Actor]
+		if !ok || !caps[node.Capability] {
+			result.Diagnostics = append(result.Diagnostics, Diagnostic{
+				Severity: "error",
+				Code:     "ACTOR_NOT_ALLOWED_CAPABILITY",
+				Message:  fmt.Sprintf("actor %s is not allowed to use capability %s for task %s", node.Actor, node.Capability, node.ID),
+				TaskID:   node.ID,
+				UUID:     node.UUID,
+			})
+		}
 	}
 	if len(node.Evidence) == 0 {
 		result.Diagnostics = append(result.Diagnostics, Diagnostic{
 			Severity: "error",
-			Code:     "MISSING_EVIDENCE_POLICY",
-			Message:  fmt.Sprintf("task %s has no evidence policy", node.ID),
+			Code:     "MISSING_EVIDENCE_REQUIREMENT",
+			Message:  fmt.Sprintf("task %s has no evidence requirement bound by convention", node.ID),
 			TaskID:   node.ID,
 			UUID:     node.UUID,
 		})
@@ -701,15 +664,6 @@ func contains(values []string, value string) bool {
 		}
 	}
 	return false
-}
-
-func ruleIDs(rules []domain.TaskBindingRule) string {
-	ids := make([]string, 0, len(rules))
-	for _, rule := range rules {
-		ids = append(ids, rule.Id)
-	}
-	sort.Strings(ids)
-	return strings.Join(ids, ", ")
 }
 
 func shortUUID(uuid string) string {
